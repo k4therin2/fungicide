@@ -123,6 +123,35 @@ get_channel_color() {
   echo "${CHANNEL_COLORS[$idx]}"
 }
 
+# Format timestamp for display
+format_timestamp() {
+  local iso_ts="$1"
+  local formatted_ts=""
+
+  if [[ "$MILITARY_TIME" == "true" ]]; then
+    local time_fmt="%Y-%m-%d %H:%M:%S"
+  else
+    local time_fmt="%Y-%m-%d %I:%M:%S %p"
+  fi
+
+  if [[ -n "$TIMEZONE" ]]; then
+    formatted_ts=$(TZ="$TIMEZONE" date -j -f "%Y-%m-%dT%H:%M:%S" "${iso_ts%%.*}" +"$time_fmt" 2>/dev/null || echo "$iso_ts")
+  else
+    if date --version &>/dev/null; then
+      formatted_ts=$(date -d "$iso_ts" +"$time_fmt" 2>/dev/null || echo "$iso_ts")
+    else
+      local date_part=$(echo "$iso_ts" | cut -d'T' -f1)
+      local time_part=$(echo "$iso_ts" | cut -d'T' -f2 | cut -d'.' -f1 | cut -d'Z' -f1 | cut -d'+' -f1)
+      formatted_ts=$(TZ=UTC date -j -f "%Y-%m-%d %H:%M:%S" "$date_part $time_part" +"$time_fmt" 2>/dev/null)
+      if [[ -z "$formatted_ts" ]]; then
+        formatted_ts="${date_part} ${time_part}"
+      fi
+    fi
+  fi
+  echo "$formatted_ts"
+}
+
+# Format and display a message
 format_message() {
   local subject="$1"
   local json="$2"
@@ -134,45 +163,17 @@ format_message() {
   local message=$(echo "$json" | jq -r '.message // .text // .content // .data // .' 2>/dev/null)
   local timestamp=$(echo "$json" | jq -r '.timestamp // .time // .ts // ""' 2>/dev/null)
 
-  # Format timestamp (date + time) with timezone conversion
+  # Format timestamp
   if [[ -n "$timestamp" ]]; then
-    # Parse ISO timestamp and convert to local/specified timezone
-    local iso_ts="$timestamp"
-    local formatted_ts=""
-
-    if [[ "$MILITARY_TIME" == "true" ]]; then
-      local time_fmt="%Y-%m-%d %H:%M:%S"
-    else
-      local time_fmt="%Y-%m-%d %I:%M:%S %p"
-    fi
-
-    if [[ -n "$TIMEZONE" ]]; then
-      # Use specified timezone
-      formatted_ts=$(TZ="$TIMEZONE" date -j -f "%Y-%m-%dT%H:%M:%S" "${iso_ts%%.*}" +"$time_fmt" 2>/dev/null || echo "$iso_ts")
-    else
-      # Convert UTC to local timezone
-      # First try GNU date, then BSD date
-      if date --version &>/dev/null; then
-        # GNU date
-        formatted_ts=$(date -d "$iso_ts" +"$time_fmt" 2>/dev/null || echo "$iso_ts")
-      else
-        # BSD date (macOS) - parse and convert from UTC
-        local date_part=$(echo "$iso_ts" | cut -d'T' -f1)
-        local time_part=$(echo "$iso_ts" | cut -d'T' -f2 | cut -d'.' -f1 | cut -d'Z' -f1 | cut -d'+' -f1)
-        formatted_ts=$(TZ=UTC date -j -f "%Y-%m-%d %H:%M:%S" "$date_part $time_part" +"$time_fmt" 2>/dev/null)
-        if [[ -z "$formatted_ts" ]]; then
-          formatted_ts="${date_part} ${time_part}"
-        fi
-      fi
-    fi
-    timestamp="$formatted_ts"
+    timestamp=$(format_timestamp "$timestamp")
   fi
 
   local channel_color=$(get_channel_color "$channel")
 
   if [[ -n "$message" && "$message" != "null" ]]; then
     # Count lines in message
-    local line_count=$(echo "$message" | wc -l | tr -d ' ')
+    local line_count=$(printf '%s' "$message" | wc -l | tr -d ' ')
+    line_count=$((line_count + 1))  # wc -l counts newlines, not lines
 
     if [[ "$line_count" -eq 1 ]]; then
       # Single line - print normally
@@ -180,36 +181,39 @@ format_message() {
     elif [[ "$SHOW_ALL" == "true" ]]; then
       # Show all lines with indentation
       echo -e "${DIM}${timestamp}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
-      echo "$message" | while IFS= read -r line; do
+      printf '%s\n' "$message" | while IFS= read -r line; do
         echo -e "    ${line}"
       done
     elif [[ "$line_count" -le "$MAX_LINES" ]]; then
       # 2-5 lines - show all with indentation
       echo -e "${DIM}${timestamp}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
-      echo "$message" | while IFS= read -r line; do
+      printf '%s\n' "$message" | while IFS= read -r line; do
         echo -e "    ${line}"
       done
     else
-      # More than 5 lines - show first 2, hidden count, last 3
-      echo -e "${DIM}${timestamp}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
-      # First 2 lines
-      echo "$message" | head -2 | while IFS= read -r line; do
-        echo -e "    ${line}"
-      done
-      # Hidden count
-      local hidden=$((line_count - 5))
+      # More than 5 lines - show first line, hidden count on line 2, last 3 lines
+      local first_line=$(printf '%s' "$message" | head -1)
+      local hidden=$((line_count - 4))
+
+      echo -e "${DIM}${timestamp}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET} ${first_line}"
       echo -e "    ${GRAY}... ${hidden} lines hidden (use -a to expand)${RESET}"
-      # Last 3 lines
-      echo "$message" | tail -3 | while IFS= read -r line; do
+      printf '%s\n' "$message" | tail -3 | while IFS= read -r line; do
         echo -e "    ${line}"
       done
     fi
   fi
 }
 
+# Temp file for collecting history messages
+HISTORY_JSON_TMP=$(mktemp)
+trap "rm -f $HISTORY_JSON_TMP" EXIT
+
 # Fetch history from streams
 if [[ "$HISTORY_COUNT" -gt 0 && -n "$STREAMS" ]]; then
   echo -e "${BOLD}${MAGENTA}=== Last $HISTORY_COUNT messages ===${RESET}"
+
+  # Initialize JSON array
+  echo '[]' > "$HISTORY_JSON_TMP"
 
   IFS=',' read -ra STREAM_ARRAY <<< "$STREAMS"
   for stream in "${STREAM_ARRAY[@]}"; do
@@ -234,9 +238,20 @@ if [[ "$HISTORY_COUNT" -gt 0 && -n "$STREAMS" ]]; then
       data=$(echo "$msg_json" | jq -r '.data // ""' | base64 -d 2>/dev/null || echo '')
 
       [[ -z "$data" ]] && continue
-      format_message "$subject" "$data"
+
+      # Add to JSON array with subject
+      jq --arg subject "$subject" --argjson data "$data" \
+        '. += [{"subject": $subject, "data": $data}]' \
+        "$HISTORY_JSON_TMP" > "${HISTORY_JSON_TMP}.new" && mv "${HISTORY_JSON_TMP}.new" "$HISTORY_JSON_TMP"
     done
-  done | sort
+  done
+
+  # Sort by timestamp and display each message
+  jq -c 'sort_by(.data.timestamp // .data.time // .data.ts // "1970-01-01") | .[]' "$HISTORY_JSON_TMP" | while IFS= read -r entry; do
+    subject=$(echo "$entry" | jq -r '.subject')
+    data=$(echo "$entry" | jq -c '.data')
+    format_message "$subject" "$data"
+  done
 
   echo ""
 fi
