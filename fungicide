@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # fungicide - IRC/Slack style output for NATS JetStream
 # https://github.com/k4therin2/fungicide
 #
@@ -37,9 +37,11 @@ GRAY='\033[90m'
 # Channel colors (rotate through these)
 CHANNEL_COLORS=("$CYAN" "$GREEN" "$YELLOW" "$MAGENTA" "$BLUE")
 
-# Track channel color assignments (random per run)
-declare -A CHANNEL_COLOR_MAP
+# Random seed for channel colors (changes each run)
 CHANNEL_COLOR_SEED=$RANDOM
+
+# Temp file to track channel color assignments (works with bash 3)
+CHANNEL_COLOR_FILE=$(mktemp)
 
 # Defaults
 HISTORY_COUNT=50
@@ -133,9 +135,10 @@ fi
 get_channel_color() {
   local channel="$1"
 
-  # Check if we already assigned a color to this channel
-  if [[ -n "${CHANNEL_COLOR_MAP[$channel]}" ]]; then
-    echo "${CHANNEL_COLOR_MAP[$channel]}"
+  # Check if we already assigned a color to this channel (using grep on temp file)
+  local existing=$(grep "^${channel}:" "$CHANNEL_COLOR_FILE" 2>/dev/null | cut -d: -f2)
+  if [[ -n "$existing" ]]; then
+    echo "$existing"
     return
   fi
 
@@ -147,7 +150,8 @@ get_channel_color() {
   local idx=$((hash % ${#CHANNEL_COLORS[@]}))
   local color="${CHANNEL_COLORS[$idx]}"
 
-  CHANNEL_COLOR_MAP[$channel]="$color"
+  # Store in temp file
+  echo "${channel}:${color}" >> "$CHANNEL_COLOR_FILE"
   echo "$color"
 }
 
@@ -263,7 +267,7 @@ format_message() {
 
 # Temp file for collecting history messages
 HISTORY_JSON_TMP=$(mktemp)
-trap "rm -f $HISTORY_JSON_TMP" EXIT
+trap "rm -f $HISTORY_JSON_TMP $CHANNEL_COLOR_FILE" EXIT
 
 # Fetch history from streams
 if [[ "$HISTORY_COUNT" -gt 0 && -n "$STREAMS" ]]; then
