@@ -8,6 +8,8 @@
 #   -n, --history COUNT   Show last COUNT messages before live tail (default: 50)
 #   -s, --streams LIST    Comma-separated stream names to read history from
 #   -a, --all             Show all lines (don't collapse long messages)
+#   -m, --military        Use 24-hour military time (default: 12-hour AM/PM)
+#   -z, --timezone TZ     Timezone for display (default: local, e.g., America/New_York)
 #   -h, --help            Show this help message
 #
 # Examples:
@@ -40,6 +42,8 @@ SUBJECT_PATTERN=""
 STREAMS=""
 SHOW_ALL=false
 MAX_LINES=5
+MILITARY_TIME=false
+TIMEZONE=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -56,8 +60,16 @@ while [[ $# -gt 0 ]]; do
       SHOW_ALL=true
       shift
       ;;
+    -m|--military)
+      MILITARY_TIME=true
+      shift
+      ;;
+    -z|--timezone)
+      TIMEZONE="$2"
+      shift 2
+      ;;
     -h|--help)
-      head -22 "$0" | tail -20 | sed 's/^# //' | sed 's/^#//'
+      head -24 "$0" | tail -22 | sed 's/^# //' | sed 's/^#//'
       exit 0
       ;;
     *)
@@ -122,11 +134,38 @@ format_message() {
   local message=$(echo "$json" | jq -r '.message // .text // .content // .data // .' 2>/dev/null)
   local timestamp=$(echo "$json" | jq -r '.timestamp // .time // .ts // ""' 2>/dev/null)
 
-  # Format timestamp (date + time)
+  # Format timestamp (date + time) with timezone conversion
   if [[ -n "$timestamp" ]]; then
-    local date_part=$(echo "$timestamp" | cut -d'T' -f1)
-    local time_part=$(echo "$timestamp" | cut -d'T' -f2 | cut -d'.' -f1 | cut -d'+' -f1)
-    timestamp="${date_part} ${time_part}"
+    # Parse ISO timestamp and convert to local/specified timezone
+    local iso_ts="$timestamp"
+    local formatted_ts=""
+
+    if [[ "$MILITARY_TIME" == "true" ]]; then
+      local time_fmt="%Y-%m-%d %H:%M:%S"
+    else
+      local time_fmt="%Y-%m-%d %I:%M:%S %p"
+    fi
+
+    if [[ -n "$TIMEZONE" ]]; then
+      # Use specified timezone
+      formatted_ts=$(TZ="$TIMEZONE" date -j -f "%Y-%m-%dT%H:%M:%S" "${iso_ts%%.*}" +"$time_fmt" 2>/dev/null || echo "$iso_ts")
+    else
+      # Convert UTC to local timezone
+      # First try GNU date, then BSD date
+      if date --version &>/dev/null; then
+        # GNU date
+        formatted_ts=$(date -d "$iso_ts" +"$time_fmt" 2>/dev/null || echo "$iso_ts")
+      else
+        # BSD date (macOS) - parse and convert from UTC
+        local date_part=$(echo "$iso_ts" | cut -d'T' -f1)
+        local time_part=$(echo "$iso_ts" | cut -d'T' -f2 | cut -d'.' -f1 | cut -d'Z' -f1 | cut -d'+' -f1)
+        formatted_ts=$(TZ=UTC date -j -f "%Y-%m-%d %H:%M:%S" "$date_part $time_part" +"$time_fmt" 2>/dev/null)
+        if [[ -z "$formatted_ts" ]]; then
+          formatted_ts="${date_part} ${time_part}"
+        fi
+      fi
+    fi
+    timestamp="$formatted_ts"
   fi
 
   local channel_color=$(get_channel_color "$channel")
