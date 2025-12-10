@@ -224,14 +224,17 @@ try:
     else:
         dt = dt.astimezone()
 
+    weekday = dt.strftime('%A')
+    month_day = dt.strftime('%B %d')
+    year = dt.year
+
     if military:
-        date_str = dt.strftime('%Y-%m-%d')
         time_str = dt.strftime('%H:%M:%S')
     else:
-        date_str = dt.strftime('%Y-%m-%d')
         time_str = dt.strftime('%I:%M:%S %p')
 
-    print(f"{date_str}|{time_str}")
+    # Format: year|weekday|month_day|time (split so bash can bold weekday)
+    print(f"{year}|{weekday}|{month_day}|{time_str}")
 except Exception as e:
     print(f"{ts}|")
 PYEOF
@@ -261,19 +264,21 @@ format_message() {
   local message=$(echo "$json" | jq -r '.message // .text // .content // .data // .' 2>/dev/null)
   local raw_timestamp=$(echo "$json" | jq -r '.timestamp // .time // .ts // ""' 2>/dev/null)
 
-  # Format timestamp (returns "date|time")
+  # Format timestamp (returns "year|weekday|month_day|time")
   local ts_parts=""
   if [[ -n "$raw_timestamp" ]]; then
     ts_parts=$(format_timestamp "$raw_timestamp")
   fi
-  local date_part=$(echo "$ts_parts" | cut -d'|' -f1)
-  local time_part=$(echo "$ts_parts" | cut -d'|' -f2)
+  local year_part=$(echo "$ts_parts" | cut -d'|' -f1)
+  local weekday_part=$(echo "$ts_parts" | cut -d'|' -f2)
+  local monthday_part=$(echo "$ts_parts" | cut -d'|' -f3)
+  local time_part=$(echo "$ts_parts" | cut -d'|' -f4)
 
   local channel_color=$(get_channel_color "$channel")
   local handle_color=$(get_handle_color "$handle")
 
   # Header prefix (for calculating indent width)
-  local header_plain="$date_part $time_part #$channel $handle: "
+  local header_plain="[$year_part] $weekday_part $monthday_part $time_part #$channel @$handle: "
   local header_len=${#header_plain}
   local indent_str=$(printf '%*s' "$header_len" '')
 
@@ -283,7 +288,8 @@ format_message() {
     line_count=$((line_count + 1))
 
     # Always print header first
-    echo -e "${DIM}${date_part} ${time_part}${RESET} ${BOLD}${channel_color}#${channel}${RESET} ${BOLD}${handle_color}@${handle}${RESET}:"
+    # Format: [2025] Wednesday December 10 10:15:22 AM #channel @handle:
+    echo -e "${DIM}[${year_part}]${RESET} ${BOLD}${weekday_part}${RESET} ${DIM}${monthday_part} ${time_part}${RESET} ${BOLD}${channel_color}#${channel}${RESET} ${BOLD}${handle_color}@${handle}${RESET}:"
 
     if [[ "$SHOW_ALL" == "true" || "$line_count" -le "$MAX_LINES" ]]; then
       # Show all lines with indentation
