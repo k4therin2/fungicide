@@ -10,6 +10,7 @@
 #   -a, --all             Show all lines (don't collapse long messages)
 #   -m, --military        Use 24-hour military time (default: 12-hour AM/PM)
 #   -z, --timezone TZ     Timezone for display (default: local, e.g., America/New_York)
+#   -w, --width WIDTH     Wrap messages at WIDTH chars (default: auto-detect, 0=no wrap)
 #   -h, --help            Show this help message
 #
 # Examples:
@@ -44,6 +45,7 @@ SHOW_ALL=false
 MAX_LINES=5
 MILITARY_TIME=false
 TIMEZONE=""
+WRAP_WIDTH=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -68,8 +70,12 @@ while [[ $# -gt 0 ]]; do
       TIMEZONE="$2"
       shift 2
       ;;
+    -w|--width)
+      WRAP_WIDTH="$2"
+      shift 2
+      ;;
     -h|--help)
-      head -24 "$0" | tail -22 | sed 's/^# //' | sed 's/^#//'
+      head -26 "$0" | tail -24 | sed 's/^# //' | sed 's/^#//'
       exit 0
       ;;
     *)
@@ -90,6 +96,16 @@ if ! command -v jq &> /dev/null; then
   exit 1
 fi
 
+if ! command -v python3 &> /dev/null; then
+  echo -e "${BOLD}Error:${RESET} python3 not found."
+  exit 1
+fi
+
+# Auto-detect terminal width if not specified
+if [[ -z "$WRAP_WIDTH" ]]; then
+  WRAP_WIDTH=$(tput cols 2>/dev/null || echo 120)
+fi
+
 # Auto-detect streams if not specified
 if [[ -z "$STREAMS" ]]; then
   STREAMS=$(nats stream ls -n 2>/dev/null | tr '\n' ',' | sed 's/,$//')
@@ -99,14 +115,11 @@ fi
 if [[ -z "$SUBJECT_PATTERN" ]]; then
   first_stream=$(echo "$STREAMS" | cut -d',' -f1)
   if [[ -n "$first_stream" ]]; then
-    # Try to get subjects from stream config
     subjects=$(nats stream info "$first_stream" -j 2>/dev/null | jq -r '.config.subjects[]? // empty' | head -1)
     if [[ -n "$subjects" ]]; then
-      # Convert specific subject to wildcard (e.g., agent-chat.coordination -> agent-chat.>)
       SUBJECT_PATTERN=$(echo "$subjects" | sed 's/\.[^.]*$/.\>/')
     fi
   fi
-  # Fallback to ">" (all subjects)
   if [[ -z "$SUBJECT_PATTERN" ]]; then
     SUBJECT_PATTERN=">"
   fi
@@ -123,32 +136,62 @@ get_channel_color() {
   echo "${CHANNEL_COLORS[$idx]}"
 }
 
-# Format timestamp for display
+# Format timestamp using python for reliable timezone conversion
 format_timestamp() {
   local iso_ts="$1"
-  local formatted_ts=""
+  local mil="$MILITARY_TIME"
+  local tz="$TIMEZONE"
 
-  if [[ "$MILITARY_TIME" == "true" ]]; then
-    local time_fmt="%Y-%m-%d %H:%M:%S"
-  else
-    local time_fmt="%Y-%m-%d %I:%M:%S %p"
+  python3 << PYEOF
+import sys
+from datetime import datetime
+
+ts = "$iso_ts"
+military = "$mil" == "true"
+tz_override = "$tz"
+
+try:
+    # Handle various ISO formats
+    if ts.endswith('Z'):
+        ts = ts[:-1] + '+00:00'
+    elif '.' in ts and '+' not in ts and '-' not in ts.split('T')[1]:
+        ts = ts + '+00:00'
+
+    dt = datetime.fromisoformat(ts)
+
+    # Convert to specified or local timezone
+    if tz_override:
+        import zoneinfo
+        target_tz = zoneinfo.ZoneInfo(tz_override)
+        dt = dt.astimezone(target_tz)
+    else:
+        dt = dt.astimezone()
+
+    if military:
+        date_str = dt.strftime('%Y-%m-%d')
+        time_str = dt.strftime('%H:%M:%S')
+    else:
+        date_str = dt.strftime('%Y-%m-%d')
+        time_str = dt.strftime('%I:%M:%S %p')
+
+    print(f"{date_str}|{time_str}")
+except Exception as e:
+    print(f"{ts}|")
+PYEOF
+}
+
+# Wrap text to specified width with indent
+wrap_text() {
+  local text="$1"
+  local indent="$2"
+  local width=$((WRAP_WIDTH - ${#indent}))
+
+  if [[ "$width" -le 20 || "$WRAP_WIDTH" -eq 0 ]]; then
+    echo "$text"
+    return
   fi
 
-  if [[ -n "$TIMEZONE" ]]; then
-    formatted_ts=$(TZ="$TIMEZONE" date -j -f "%Y-%m-%dT%H:%M:%S" "${iso_ts%%.*}" +"$time_fmt" 2>/dev/null || echo "$iso_ts")
-  else
-    if date --version &>/dev/null; then
-      formatted_ts=$(date -d "$iso_ts" +"$time_fmt" 2>/dev/null || echo "$iso_ts")
-    else
-      local date_part=$(echo "$iso_ts" | cut -d'T' -f1)
-      local time_part=$(echo "$iso_ts" | cut -d'T' -f2 | cut -d'.' -f1 | cut -d'Z' -f1 | cut -d'+' -f1)
-      formatted_ts=$(TZ=UTC date -j -f "%Y-%m-%d %H:%M:%S" "$date_part $time_part" +"$time_fmt" 2>/dev/null)
-      if [[ -z "$formatted_ts" ]]; then
-        formatted_ts="${date_part} ${time_part}"
-      fi
-    fi
-  fi
-  echo "$formatted_ts"
+  echo "$text" | fold -s -w "$width"
 }
 
 # Format and display a message
@@ -156,46 +199,59 @@ format_message() {
   local subject="$1"
   local json="$2"
 
-  # Extract channel from subject (last part after last dot)
   local channel=$(echo "$subject" | rev | cut -d'.' -f1 | rev)
-
   local handle=$(echo "$json" | jq -r '.handle // .user // .from // "unknown"' 2>/dev/null)
   local message=$(echo "$json" | jq -r '.message // .text // .content // .data // .' 2>/dev/null)
-  local timestamp=$(echo "$json" | jq -r '.timestamp // .time // .ts // ""' 2>/dev/null)
+  local raw_timestamp=$(echo "$json" | jq -r '.timestamp // .time // .ts // ""' 2>/dev/null)
 
-  # Format timestamp
-  if [[ -n "$timestamp" ]]; then
-    timestamp=$(format_timestamp "$timestamp")
+  # Format timestamp (returns "date|time")
+  local ts_parts=""
+  if [[ -n "$raw_timestamp" ]]; then
+    ts_parts=$(format_timestamp "$raw_timestamp")
   fi
+  local date_part=$(echo "$ts_parts" | cut -d'|' -f1)
+  local time_part=$(echo "$ts_parts" | cut -d'|' -f2)
 
   local channel_color=$(get_channel_color "$channel")
 
+  # Header prefix (for calculating indent width)
+  local header_plain="$date_part $time_part #$channel $handle: "
+  local header_len=${#header_plain}
+  local indent_str=$(printf '%*s' "$header_len" '')
+
   if [[ -n "$message" && "$message" != "null" ]]; then
-    # Count lines in message
+    # Count actual newlines in message
     local line_count=$(printf '%s' "$message" | wc -l | tr -d ' ')
-    line_count=$((line_count + 1))  # wc -l counts newlines, not lines
+    line_count=$((line_count + 1))
 
     if [[ "$line_count" -eq 1 ]]; then
-      # Single line - print normally
-      echo -e "${DIM}${timestamp}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET} ${message}"
+      # Single line - check if it needs wrapping
+      local total_len=$((header_len + ${#message}))
+      if [[ "$WRAP_WIDTH" -gt 0 && "$total_len" -gt "$WRAP_WIDTH" ]]; then
+        # Wrap long single line
+        echo -e "${GRAY}${date_part}${RESET} ${DIM}${time_part}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
+        wrap_text "$message" "    " | while IFS= read -r line; do
+          echo -e "    ${line}"
+        done
+      else
+        echo -e "${GRAY}${date_part}${RESET} ${DIM}${time_part}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET} ${message}"
+      fi
     elif [[ "$SHOW_ALL" == "true" ]]; then
-      # Show all lines with indentation
-      echo -e "${DIM}${timestamp}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
+      echo -e "${GRAY}${date_part}${RESET} ${DIM}${time_part}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
       printf '%s\n' "$message" | while IFS= read -r line; do
         echo -e "    ${line}"
       done
     elif [[ "$line_count" -le "$MAX_LINES" ]]; then
-      # 2-5 lines - show all with indentation
-      echo -e "${DIM}${timestamp}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
+      echo -e "${GRAY}${date_part}${RESET} ${DIM}${time_part}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
       printf '%s\n' "$message" | while IFS= read -r line; do
         echo -e "    ${line}"
       done
     else
-      # More than 5 lines - show first line, hidden count on line 2, last 3 lines
+      # More than 5 lines - show first line, hidden count, last 3 lines
       local first_line=$(printf '%s' "$message" | head -1)
       local hidden=$((line_count - 4))
 
-      echo -e "${DIM}${timestamp}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET} ${first_line}"
+      echo -e "${GRAY}${date_part}${RESET} ${DIM}${time_part}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET} ${first_line}"
       echo -e "    ${GRAY}... ${hidden} lines hidden (use -a to expand)${RESET}"
       printf '%s\n' "$message" | tail -3 | while IFS= read -r line; do
         echo -e "    ${line}"
@@ -212,15 +268,13 @@ trap "rm -f $HISTORY_JSON_TMP" EXIT
 if [[ "$HISTORY_COUNT" -gt 0 && -n "$STREAMS" ]]; then
   echo -e "${BOLD}${MAGENTA}=== Last $HISTORY_COUNT messages ===${RESET}"
 
-  # Initialize JSON array
   echo '[]' > "$HISTORY_JSON_TMP"
 
   IFS=',' read -ra STREAM_ARRAY <<< "$STREAMS"
   for stream in "${STREAM_ARRAY[@]}"; do
-    stream=$(echo "$stream" | xargs)  # trim whitespace
+    stream=$(echo "$stream" | xargs)
     [[ -z "$stream" ]] && continue
 
-    # Get stream info to find last sequence
     stream_info=$(nats stream info "$stream" -j 2>/dev/null || echo '{}')
     last_seq=$(echo "$stream_info" | jq -r '.state.last_seq // 0')
 
@@ -229,7 +283,6 @@ if [[ "$HISTORY_COUNT" -gt 0 && -n "$STREAMS" ]]; then
     first_seq=$((last_seq - HISTORY_COUNT + 1))
     [[ $first_seq -lt 1 ]] && first_seq=1
 
-    # Fetch each message
     for seq in $(seq $first_seq $last_seq); do
       msg_json=$(nats stream get "$stream" "$seq" -j 2>/dev/null || echo '')
       [[ -z "$msg_json" ]] && continue
@@ -239,14 +292,12 @@ if [[ "$HISTORY_COUNT" -gt 0 && -n "$STREAMS" ]]; then
 
       [[ -z "$data" ]] && continue
 
-      # Add to JSON array with subject
       jq --arg subject "$subject" --argjson data "$data" \
         '. += [{"subject": $subject, "data": $data}]' \
         "$HISTORY_JSON_TMP" > "${HISTORY_JSON_TMP}.new" && mv "${HISTORY_JSON_TMP}.new" "$HISTORY_JSON_TMP"
     done
   done
 
-  # Sort by timestamp and display each message
   jq -c 'sort_by(.data.timestamp // .data.time // .data.ts // "1970-01-01") | .[]' "$HISTORY_JSON_TMP" | while IFS= read -r entry; do
     subject=$(echo "$entry" | jq -r '.subject')
     data=$(echo "$entry" | jq -c '.data')
