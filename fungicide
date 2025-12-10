@@ -151,13 +151,19 @@ format_message() {
         echo -e "    ${line}"
       done
     else
-      # More than 5 lines - collapse with hint
+      # More than 5 lines - show first 2, hidden count, last 3
       echo -e "${DIM}${timestamp}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
-      echo "$message" | head -3 | while IFS= read -r line; do
+      # First 2 lines
+      echo "$message" | head -2 | while IFS= read -r line; do
         echo -e "    ${line}"
       done
-      local hidden=$((line_count - 3))
-      echo -e "    ${GRAY}... ${hidden} more lines (use -a to show all)${RESET}"
+      # Hidden count
+      local hidden=$((line_count - 5))
+      echo -e "    ${GRAY}... ${hidden} lines hidden (use -a to expand)${RESET}"
+      # Last 3 lines
+      echo "$message" | tail -3 | while IFS= read -r line; do
+        echo -e "    ${line}"
+      done
     fi
   fi
 }
