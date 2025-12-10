@@ -293,19 +293,19 @@ format_message() {
     echo -e "${DIM}[${year_part}] ${CYAN}${weekday_part}${RESET}${DIM} ${monthday_part} ${time_part}${RESET} ${BOLD}${channel_color}#${channel}${RESET} ${BOLD}${handle_color}@${handle}${RESET}:"
 
     if [[ "$SHOW_ALL" == "true" || "$line_count" -le "$MAX_LINES" ]]; then
-      # Show all lines with indentation (skip empty lines)
+      # Show all lines with indentation
       printf '%s\n' "$message" | while IFS= read -r line; do
-        [[ -n "$line" ]] && echo -e "    ${WHITE}${line}${RESET}"
+        echo -e "    ${WHITE}${line}${RESET}"
       done
     else
       # More than 5 lines - show first 2, hidden count, last 3
       printf '%s\n' "$message" | head -2 | while IFS= read -r line; do
-        [[ -n "$line" ]] && echo -e "    ${WHITE}${line}${RESET}"
+        echo -e "    ${WHITE}${line}${RESET}"
       done
       local hidden=$((line_count - 5))
       echo -e "    ${GRAY}... ${hidden} lines hidden (use -a to expand)${RESET}"
       printf '%s\n' "$message" | tail -3 | while IFS= read -r line; do
-        [[ -n "$line" ]] && echo -e "    ${WHITE}${line}${RESET}"
+        echo -e "    ${WHITE}${line}${RESET}"
       done
     fi
     # Blank line after each message
