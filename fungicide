@@ -1,6 +1,6 @@
 #!/bin/bash
 # fungicide - IRC/Slack style output for NATS JetStream
-# https://github.com/yourusername/fungicide
+# https://github.com/k4therin2/fungicide
 #
 # Usage: fungicide [options] [subject_pattern]
 #

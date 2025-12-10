@@ -17,7 +17,7 @@ IRC/Slack-style log output for NATS JetStream. Watch your NATS messages in a hum
 ### Via Homebrew (recommended)
 
 ```bash
-brew tap yourusername/homebrew-tap
+brew tap k4therin2/homebrew-tap
 brew install fungicide
 ```
 
@@ -25,7 +25,7 @@ brew install fungicide
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourusername/fungicide.git
+git clone https://github.com/k4therin2/fungicide.git
 cd fungicide
 
 # Make executable and link to PATH
