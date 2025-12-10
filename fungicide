@@ -7,11 +7,13 @@
 # Options:
 #   -n, --history COUNT   Show last COUNT messages before live tail (default: 50)
 #   -s, --streams LIST    Comma-separated stream names to read history from
+#   -a, --all             Show all lines (don't collapse long messages)
 #   -h, --help            Show this help message
 #
 # Examples:
 #   fungicide                           # Subscribe to all subjects, 50 msg history
 #   fungicide -n 20                     # Last 20 messages then live tail
+#   fungicide -a                        # Show full messages (no collapsing)
 #   fungicide "agent-chat.>"            # Custom subject pattern
 #   fungicide -s "STREAM1,STREAM2" -n 10  # Specific streams
 
@@ -27,6 +29,7 @@ YELLOW='\033[33m'
 MAGENTA='\033[35m'
 BLUE='\033[34m'
 WHITE='\033[37m'
+GRAY='\033[90m'
 
 # Channel colors (rotate through these)
 CHANNEL_COLORS=("$CYAN" "$GREEN" "$YELLOW" "$MAGENTA" "$BLUE")
@@ -35,6 +38,8 @@ CHANNEL_COLORS=("$CYAN" "$GREEN" "$YELLOW" "$MAGENTA" "$BLUE")
 HISTORY_COUNT=50
 SUBJECT_PATTERN=""
 STREAMS=""
+SHOW_ALL=false
+MAX_LINES=5
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -47,8 +52,12 @@ while [[ $# -gt 0 ]]; do
       STREAMS="$2"
       shift 2
       ;;
+    -a|--all)
+      SHOW_ALL=true
+      shift
+      ;;
     -h|--help)
-      head -20 "$0" | tail -18 | sed 's/^# //' | sed 's/^#//'
+      head -22 "$0" | tail -20 | sed 's/^# //' | sed 's/^#//'
       exit 0
       ;;
     *)
@@ -123,7 +132,33 @@ format_message() {
   local channel_color=$(get_channel_color "$channel")
 
   if [[ -n "$message" && "$message" != "null" ]]; then
-    echo -e "${DIM}${timestamp}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET} ${message}"
+    # Count lines in message
+    local line_count=$(echo "$message" | wc -l | tr -d ' ')
+
+    if [[ "$line_count" -eq 1 ]]; then
+      # Single line - print normally
+      echo -e "${DIM}${timestamp}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET} ${message}"
+    elif [[ "$SHOW_ALL" == "true" ]]; then
+      # Show all lines with indentation
+      echo -e "${DIM}${timestamp}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
+      echo "$message" | while IFS= read -r line; do
+        echo -e "    ${line}"
+      done
+    elif [[ "$line_count" -le "$MAX_LINES" ]]; then
+      # 2-5 lines - show all with indentation
+      echo -e "${DIM}${timestamp}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
+      echo "$message" | while IFS= read -r line; do
+        echo -e "    ${line}"
+      done
+    else
+      # More than 5 lines - collapse with hint
+      echo -e "${DIM}${timestamp}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
+      echo "$message" | head -3 | while IFS= read -r line; do
+        echo -e "    ${line}"
+      done
+      local hidden=$((line_count - 3))
+      echo -e "    ${GRAY}... ${hidden} more lines (use -a to show all)${RESET}"
+    fi
   fi
 }
 
