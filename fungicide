@@ -37,6 +37,10 @@ GRAY='\033[90m'
 # Channel colors (rotate through these)
 CHANNEL_COLORS=("$CYAN" "$GREEN" "$YELLOW" "$MAGENTA" "$BLUE")
 
+# Track channel color assignments (random per run)
+declare -A CHANNEL_COLOR_MAP
+CHANNEL_COLOR_SEED=$RANDOM
+
 # Defaults
 HISTORY_COUNT=50
 SUBJECT_PATTERN=""
@@ -125,15 +129,26 @@ if [[ -z "$SUBJECT_PATTERN" ]]; then
   fi
 fi
 
-# Get color for channel (consistent per channel name)
+# Get color for channel (consistent within run, random across runs)
 get_channel_color() {
   local channel="$1"
-  local hash=0
+
+  # Check if we already assigned a color to this channel
+  if [[ -n "${CHANNEL_COLOR_MAP[$channel]}" ]]; then
+    echo "${CHANNEL_COLOR_MAP[$channel]}"
+    return
+  fi
+
+  # Assign a new color based on seed + channel name hash
+  local hash=$CHANNEL_COLOR_SEED
   for (( i=0; i<${#channel}; i++ )); do
     hash=$((hash + $(printf '%d' "'${channel:$i:1}")))
   done
   local idx=$((hash % ${#CHANNEL_COLORS[@]}))
-  echo "${CHANNEL_COLORS[$idx]}"
+  local color="${CHANNEL_COLORS[$idx]}"
+
+  CHANNEL_COLOR_MAP[$channel]="$color"
+  echo "$color"
 }
 
 # Format timestamp using python for reliable timezone conversion
