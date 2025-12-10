@@ -34,14 +34,28 @@ BLUE='\033[34m'
 WHITE='\033[37m'
 GRAY='\033[90m'
 
-# Channel colors (rotate through these)
+# Channel colors (bright, for channels)
 CHANNEL_COLORS=("$CYAN" "$GREEN" "$YELLOW" "$MAGENTA" "$BLUE")
+
+# Handle colors (muted/pastel variants using 256-color codes)
+# These are softer versions to distinguish from channels
+HANDLE_COLORS=(
+  '\033[38;5;117m'  # light blue
+  '\033[38;5;151m'  # light green
+  '\033[38;5;223m'  # peach
+  '\033[38;5;182m'  # light purple
+  '\033[38;5;174m'  # dusty rose
+  '\033[38;5;152m'  # light cyan
+  '\033[38;5;187m'  # light yellow
+  '\033[38;5;139m'  # muted purple
+)
 
 # Random seed for channel colors (changes each run)
 CHANNEL_COLOR_SEED=$RANDOM
 
-# Temp file to track channel color assignments (works with bash 3)
+# Temp files to track color assignments (works with bash 3)
 CHANNEL_COLOR_FILE=$(mktemp)
+HANDLE_COLOR_FILE=$(mktemp)
 
 # Defaults
 HISTORY_COUNT=50
@@ -155,6 +169,30 @@ get_channel_color() {
   echo "$color"
 }
 
+# Get color for handle/agent name (consistent within run, random across runs)
+get_handle_color() {
+  local handle="$1"
+
+  # Check if we already assigned a color to this handle
+  local existing=$(grep "^${handle}:" "$HANDLE_COLOR_FILE" 2>/dev/null | cut -d: -f2-)
+  if [[ -n "$existing" ]]; then
+    echo "$existing"
+    return
+  fi
+
+  # Assign a new color based on seed + handle name hash
+  local hash=$CHANNEL_COLOR_SEED
+  for (( i=0; i<${#handle}; i++ )); do
+    hash=$((hash + $(printf '%d' "'${handle:$i:1}") * (i + 1)))
+  done
+  local idx=$((hash % ${#HANDLE_COLORS[@]}))
+  local color="${HANDLE_COLORS[$idx]}"
+
+  # Store in temp file
+  echo "${handle}:${color}" >> "$HANDLE_COLOR_FILE"
+  echo "$color"
+}
+
 # Format timestamp using python for reliable timezone conversion
 format_timestamp() {
   local iso_ts="$1"
@@ -232,6 +270,7 @@ format_message() {
   local time_part=$(echo "$ts_parts" | cut -d'|' -f2)
 
   local channel_color=$(get_channel_color "$channel")
+  local handle_color=$(get_handle_color "$handle")
 
   # Header prefix (for calculating indent width)
   local header_plain="$date_part $time_part #$channel $handle: "
@@ -244,7 +283,7 @@ format_message() {
     line_count=$((line_count + 1))
 
     # Always print header first
-    echo -e "${GRAY}${date_part}${RESET} ${DIM}${time_part}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
+    echo -e "${GRAY}${date_part}${RESET} ${DIM}${time_part}${RESET} ${channel_color}#${channel}${RESET} ${handle_color}${handle}${RESET}${DIM}:${RESET}"
 
     if [[ "$SHOW_ALL" == "true" || "$line_count" -le "$MAX_LINES" ]]; then
       # Show all lines with indentation
@@ -267,7 +306,7 @@ format_message() {
 
 # Temp file for collecting history messages
 HISTORY_JSON_TMP=$(mktemp)
-trap "rm -f $HISTORY_JSON_TMP $CHANNEL_COLOR_FILE" EXIT
+trap "rm -f $HISTORY_JSON_TMP $CHANNEL_COLOR_FILE $HANDLE_COLOR_FILE" EXIT
 
 # Fetch history from streams
 if [[ "$HISTORY_COUNT" -gt 0 && -n "$STREAMS" ]]; then
