@@ -1,0 +1,149 @@
+#!/bin/bash
+# fungicide - IRC/Slack style output for NATS JetStream
+# https://github.com/yourusername/fungicide
+#
+# Usage: fungicide [options] [subject_pattern]
+#
+# Options:
+#   -n, --history COUNT   Show last COUNT messages before live tail (default: 50)
+#   -s, --streams LIST    Comma-separated stream names to read history from
+#   -h, --help            Show this help message
+#
+# Examples:
+#   fungicide                           # Subscribe to all subjects, 50 msg history
+#   fungicide -n 20                     # Last 20 messages then live tail
+#   fungicide "agent-chat.>"            # Custom subject pattern
+#   fungicide -s "STREAM1,STREAM2" -n 10  # Specific streams
+
+set -e
+
+# Defaults
+HISTORY_COUNT=50
+SUBJECT_PATTERN=""
+STREAMS=""
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -n|--history)
+      HISTORY_COUNT="$2"
+      shift 2
+      ;;
+    -s|--streams)
+      STREAMS="$2"
+      shift 2
+      ;;
+    -h|--help)
+      head -20 "$0" | tail -18 | sed 's/^# //' | sed 's/^#//'
+      exit 0
+      ;;
+    *)
+      SUBJECT_PATTERN="$1"
+      shift
+      ;;
+  esac
+done
+
+# Check dependencies
+if ! command -v nats &> /dev/null; then
+  echo "Error: nats CLI not found. Install with: brew install nats-io/nats-tools/nats"
+  exit 1
+fi
+
+if ! command -v jq &> /dev/null; then
+  echo "Error: jq not found. Install with: brew install jq"
+  exit 1
+fi
+
+# Auto-detect streams if not specified
+if [[ -z "$STREAMS" ]]; then
+  STREAMS=$(nats stream ls -n 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+fi
+
+# Auto-detect subject pattern from first stream if not specified
+if [[ -z "$SUBJECT_PATTERN" ]]; then
+  first_stream=$(echo "$STREAMS" | cut -d',' -f1)
+  if [[ -n "$first_stream" ]]; then
+    # Try to get subjects from stream config
+    subjects=$(nats stream info "$first_stream" -j 2>/dev/null | jq -r '.config.subjects[]? // empty' | head -1)
+    if [[ -n "$subjects" ]]; then
+      # Convert specific subject to wildcard (e.g., agent-chat.coordination -> agent-chat.>)
+      SUBJECT_PATTERN=$(echo "$subjects" | sed 's/\.[^.]*$/.\>/')
+    fi
+  fi
+  # Fallback to ">" (all subjects)
+  if [[ -z "$SUBJECT_PATTERN" ]]; then
+    SUBJECT_PATTERN=">"
+  fi
+fi
+
+format_message() {
+  local subject="$1"
+  local json="$2"
+
+  # Extract channel from subject (last part after last dot)
+  local channel=$(echo "$subject" | rev | cut -d'.' -f1 | rev)
+
+  local handle=$(echo "$json" | jq -r '.handle // .user // .from // "unknown"' 2>/dev/null)
+  local message=$(echo "$json" | jq -r '.message // .text // .content // .data // .' 2>/dev/null)
+  local timestamp=$(echo "$json" | jq -r '.timestamp // .time // .ts // ""' 2>/dev/null)
+
+  # Format timestamp
+  if [[ -n "$timestamp" ]]; then
+    timestamp=$(echo "$timestamp" | cut -d'T' -f2 | cut -d'.' -f1 | cut -d'+' -f1)
+    timestamp="[$timestamp]"
+  fi
+
+  if [[ -n "$message" && "$message" != "null" ]]; then
+    echo "$timestamp #$channel | $handle: $message"
+  fi
+}
+
+# Fetch history from streams
+if [[ "$HISTORY_COUNT" -gt 0 && -n "$STREAMS" ]]; then
+  echo "=== Last $HISTORY_COUNT messages ==="
+
+  IFS=',' read -ra STREAM_ARRAY <<< "$STREAMS"
+  for stream in "${STREAM_ARRAY[@]}"; do
+    stream=$(echo "$stream" | xargs)  # trim whitespace
+    [[ -z "$stream" ]] && continue
+
+    # Get stream info to find last sequence
+    stream_info=$(nats stream info "$stream" -j 2>/dev/null || echo '{}')
+    last_seq=$(echo "$stream_info" | jq -r '.state.last_seq // 0')
+
+    [[ "$last_seq" == "0" || "$last_seq" == "null" ]] && continue
+
+    first_seq=$((last_seq - HISTORY_COUNT + 1))
+    [[ $first_seq -lt 1 ]] && first_seq=1
+
+    # Fetch each message
+    for seq in $(seq $first_seq $last_seq); do
+      msg_json=$(nats stream get "$stream" "$seq" -j 2>/dev/null || echo '')
+      [[ -z "$msg_json" ]] && continue
+
+      subject=$(echo "$msg_json" | jq -r '.subject // ""')
+      data=$(echo "$msg_json" | jq -r '.data // ""' | base64 -d 2>/dev/null || echo '')
+
+      [[ -z "$data" ]] && continue
+      format_message "$subject" "$data"
+    done
+  done | sort
+
+  echo ""
+fi
+
+echo "=== Live tail on '$SUBJECT_PATTERN' (Ctrl+C to exit) ==="
+
+# Live tail
+current_subject=""
+nats sub "$SUBJECT_PATTERN" 2>/dev/null | while read -r line; do
+  if [[ "$line" == *"Received on"* ]]; then
+    current_subject=$(echo "$line" | sed 's/.*"\([^"]*\)".*/\1/')
+    continue
+  fi
+
+  if [[ "$line" == "{"* ]]; then
+    format_message "$current_subject" "$line"
+  fi
+done
