@@ -283,7 +283,7 @@ format_message() {
     line_count=$((line_count + 1))
 
     # Always print header first
-    echo -e "${GRAY}${date_part}${RESET} ${DIM}${time_part}${RESET} ${channel_color}#${channel}${RESET} ${handle_color}${handle}${RESET}${DIM}:${RESET}"
+    echo -e "${DIM}${date_part} ${time_part}${RESET} ${BOLD}${channel_color}#${channel}${RESET} ${BOLD}${handle_color}@${handle}${RESET}:"
 
     if [[ "$SHOW_ALL" == "true" || "$line_count" -le "$MAX_LINES" ]]; then
       # Show all lines with indentation
