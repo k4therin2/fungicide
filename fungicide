@@ -113,9 +113,11 @@ format_message() {
   local message=$(echo "$json" | jq -r '.message // .text // .content // .data // .' 2>/dev/null)
   local timestamp=$(echo "$json" | jq -r '.timestamp // .time // .ts // ""' 2>/dev/null)
 
-  # Format timestamp
+  # Format timestamp (date + time)
   if [[ -n "$timestamp" ]]; then
-    timestamp=$(echo "$timestamp" | cut -d'T' -f2 | cut -d'.' -f1 | cut -d'+' -f1)
+    local date_part=$(echo "$timestamp" | cut -d'T' -f1)
+    local time_part=$(echo "$timestamp" | cut -d'T' -f2 | cut -d'.' -f1 | cut -d'+' -f1)
+    timestamp="${date_part} ${time_part}"
   fi
 
   local channel_color=$(get_channel_color "$channel")
