@@ -224,34 +224,20 @@ format_message() {
     local line_count=$(printf '%s' "$message" | wc -l | tr -d ' ')
     line_count=$((line_count + 1))
 
-    if [[ "$line_count" -eq 1 ]]; then
-      # Single line - check if it needs wrapping
-      local total_len=$((header_len + ${#message}))
-      if [[ "$WRAP_WIDTH" -gt 0 && "$total_len" -gt "$WRAP_WIDTH" ]]; then
-        # Wrap long single line
-        echo -e "${GRAY}${date_part}${RESET} ${DIM}${time_part}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
-        wrap_text "$message" "    " | while IFS= read -r line; do
-          echo -e "    ${line}"
-        done
-      else
-        echo -e "${GRAY}${date_part}${RESET} ${DIM}${time_part}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET} ${message}"
-      fi
-    elif [[ "$SHOW_ALL" == "true" ]]; then
-      echo -e "${GRAY}${date_part}${RESET} ${DIM}${time_part}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
-      printf '%s\n' "$message" | while IFS= read -r line; do
-        echo -e "    ${line}"
-      done
-    elif [[ "$line_count" -le "$MAX_LINES" ]]; then
-      echo -e "${GRAY}${date_part}${RESET} ${DIM}${time_part}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
+    # Always print header first
+    echo -e "${GRAY}${date_part}${RESET} ${DIM}${time_part}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET}"
+
+    if [[ "$SHOW_ALL" == "true" || "$line_count" -le "$MAX_LINES" ]]; then
+      # Show all lines with indentation
       printf '%s\n' "$message" | while IFS= read -r line; do
         echo -e "    ${line}"
       done
     else
-      # More than 5 lines - show first line, hidden count, last 3 lines
-      local first_line=$(printf '%s' "$message" | head -1)
-      local hidden=$((line_count - 4))
-
-      echo -e "${GRAY}${date_part}${RESET} ${DIM}${time_part}${RESET} ${channel_color}#${channel}${RESET} ${BOLD}${WHITE}${handle}${RESET}${DIM}:${RESET} ${first_line}"
+      # More than 5 lines - show first 2, hidden count, last 3
+      printf '%s\n' "$message" | head -2 | while IFS= read -r line; do
+        echo -e "    ${line}"
+      done
+      local hidden=$((line_count - 5))
       echo -e "    ${GRAY}... ${hidden} lines hidden (use -a to expand)${RESET}"
       printf '%s\n' "$message" | tail -3 | while IFS= read -r line; do
         echo -e "    ${line}"
