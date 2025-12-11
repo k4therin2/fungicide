@@ -366,7 +366,7 @@ echo -e "${BOLD}${GREEN}=== Live tail on '${CYAN}$SUBJECT_PATTERN${GREEN}' (Ctrl
 current_subject=""
 nats sub "$SUBJECT_PATTERN" 2>/dev/null | while read -r line; do
   if [[ "$line" == *"Received on"* ]]; then
-    current_subject=$(echo "$line" | sed 's/.*"\([^"]*\)".*/\1/')
+    current_subject=$(echo "$line" | sed 's/.*Received on "\([^"]*\)".*/\1/')
     continue
   fi
 
